@@ -1,0 +1,5 @@
+{
+  "name": "Hello Desktop",
+  "description": "A simple desktop-style app that says hello.",
+  "requestFramePermissions": []
+}
