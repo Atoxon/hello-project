@@ -8,7 +8,12 @@ interface ResultEntry {
   output: string | null;
   status: 'converted' | 'failed' | 'skipped';
   error?: string;
+  bytes?: number;
 }
+
+const MAX_FILE_SIZE_MB = Number(process.env.CONVERT_MAX_FILE_SIZE_MB ?? 50);
+const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
+const FILE_TIMEOUT_MS = Number(process.env.CONVERT_FILE_TIMEOUT_MS ?? 30_000);
 
 async function collectFiles(target: string): Promise<string[]> {
   const s = await stat(target);
@@ -30,22 +35,50 @@ async function collectFiles(target: string): Promise<string[]> {
   return out;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timeout after ${ms}ms while ${label}`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function convertOne(filePath: string): Promise<ResultEntry> {
   const ext = extname(filePath).toLowerCase();
   const converter = getConverter(ext);
   if (!converter) {
     return { input: filePath, output: null, status: 'skipped', error: `Unsupported extension: ${ext}` };
   }
+
+  let size: number;
   try {
-    const markdown = await converter(filePath);
+    size = (await stat(filePath)).size;
+  } catch (err) {
+    return { input: filePath, output: null, status: 'failed', error: `Cannot stat: ${(err as Error).message}` };
+  }
+
+  if (size > MAX_FILE_SIZE_BYTES) {
+    return {
+      input: filePath,
+      output: null,
+      status: 'failed',
+      bytes: size,
+      error: `File too large: ${size} bytes > limit ${MAX_FILE_SIZE_BYTES} bytes (CONVERT_MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB})`,
+    };
+  }
+
+  try {
+    const markdown = await withTimeout(converter(filePath), FILE_TIMEOUT_MS, `converting ${basename(filePath)}`);
     const dir = dirname(filePath);
     const base = basename(filePath, ext);
     const outputPath = findAvailableOutputPath(dir, base);
     await writeFile(outputPath, markdown, 'utf8');
-    return { input: filePath, output: outputPath, status: 'converted' };
+    return { input: filePath, output: outputPath, status: 'converted', bytes: size };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return { input: filePath, output: null, status: 'failed', error: message };
+    return { input: filePath, output: null, status: 'failed', bytes: size, error: message };
   }
 }
 
@@ -56,6 +89,7 @@ async function main(): Promise<void> {
       success: false,
       error: 'Usage: npm run convert -- <file_or_folder_path>',
       supported: [...SUPPORTED_EXTS].sort(),
+      limits: { maxFileSizeMB: MAX_FILE_SIZE_MB, fileTimeoutMs: FILE_TIMEOUT_MS },
     }) + '\n');
     process.exit(2);
   }
@@ -100,6 +134,7 @@ async function main(): Promise<void> {
     success: summary.failed === 0,
     summary,
     results,
+    limits: { maxFileSizeMB: MAX_FILE_SIZE_MB, fileTimeoutMs: FILE_TIMEOUT_MS },
   };
   process.stdout.write(JSON.stringify(output, null, 2) + '\n');
   process.exit(summary.failed > 0 ? 1 : 0);

@@ -59,3 +59,40 @@ Spreadsheets are rendered as GitHub-flavored Markdown tables (multi-sheet workbo
 - `0` — all files converted (or zero supported files found)
 - `1` — at least one file failed conversion
 - `2` — usage error / path not accessible
+
+### Security hardening (enterprise)
+
+The converter is designed to be safe to run on untrusted documents but it executes parsers from the npm ecosystem. The following safeguards ship by default:
+
+- **Per-file size limit** (`CONVERT_MAX_FILE_SIZE_MB`, default `50`): files larger than this are rejected before parsing.
+- **Per-file timeout** (`CONVERT_FILE_TIMEOUT_MS`, default `30000`): each conversion is wrapped in a hard timeout to bound DoS exposure.
+- **Error isolation**: a failure on one file does not abort the batch; each file gets its own try/catch and a structured `failed` entry in the JSON output.
+- **No network calls** from any converter — they are pure parsers reading the input file.
+- **No script execution**: `jsdom` is used without `runScripts`, `.doc`/`.docx` parsers only read text streams (no VBA macro execution).
+- **`uuid` overridden to `^11.1.1`** in `package.json` to patch the known buffer-bounds advisory pulled in via `exceljs`.
+
+#### CI audit gate
+
+Run `npm run audit:ci` — fails the build on any **high** or **critical** advisory:
+
+```bash
+npm run audit:ci
+```
+
+Configured via `audit-ci.json`. Currently reports `0 vulnerabilities`.
+
+#### Sandboxed container
+
+`Dockerfile.convert` builds a hardened runtime image. Recommended run flags:
+
+```bash
+docker build -f Dockerfile.convert -t doc2md .
+docker run --rm \
+  --network=none --read-only --tmpfs /tmp \
+  --cap-drop=ALL --security-opt no-new-privileges \
+  --memory=512m --pids-limit=128 \
+  -v /host/path/to/docs:/work \
+  doc2md /work
+```
+
+This blocks outbound network, drops Linux capabilities, prevents privilege escalation, and caps memory/PIDs — so even an RCE in a parser cannot reach the network or persist.

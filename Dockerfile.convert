@@ -1,0 +1,31 @@
+# Sandboxed container for the document-to-Markdown CLI.
+# Build once:   docker build -f Dockerfile.convert -t doc2md .
+# Run on a folder (host path mounted read/write):
+#   docker run --rm \
+#     --network=none \
+#     --read-only \
+#     --tmpfs /tmp \
+#     --cap-drop=ALL \
+#     --security-opt no-new-privileges \
+#     --memory=512m --pids-limit=128 \
+#     -v /host/path/to/docs:/work \
+#     doc2md /work
+FROM node:22-alpine
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund \
+ && npm cache clean --force
+
+COPY tsconfig.json ./
+COPY scripts ./scripts
+
+RUN addgroup -S app && adduser -S app -G app \
+ && chown -R app:app /app
+USER app
+
+ENV NODE_ENV=production
+ENV CONVERT_MAX_FILE_SIZE_MB=50
+ENV CONVERT_FILE_TIMEOUT_MS=30000
+
+ENTRYPOINT ["npx", "--no-install", "tsx", "scripts/convert.ts"]

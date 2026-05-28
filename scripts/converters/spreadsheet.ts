@@ -1,14 +1,19 @@
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
-import xlsx from 'xlsx';
+import ExcelJS from 'exceljs';
 import { parse as parseCsv } from 'csv-parse/sync';
-
-const { readFile: xlsxReadFile, utils: xlsxUtils } = xlsx;
 
 function escapeCell(value: unknown): string {
   if (value === null || value === undefined) return '';
-  const s = String(value);
-  return s.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'object') {
+    const obj = value as { text?: string; result?: unknown; richText?: Array<{ text: string }> };
+    if (obj.richText) return obj.richText.map((r) => r.text).join('');
+    if (typeof obj.text === 'string') return obj.text;
+    if (obj.result !== undefined) return escapeCell(obj.result);
+    return String(value);
+  }
+  return String(value).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 }
 
 function rowsToMarkdownTable(rows: unknown[][]): string {
@@ -35,20 +40,33 @@ export async function convertSpreadsheet(filePath: string): Promise<string> {
   if (ext === '.csv' || ext === '.tsv') {
     const raw = await readFile(filePath, 'utf8');
     const delimiter = ext === '.tsv' ? '\t' : ',';
-    const rows = parseCsv(raw, { delimiter, relax_column_count: true, skip_empty_lines: true }) as unknown[][];
-    const table = rowsToMarkdownTable(rows);
-    return (table || '') + '\n';
+    const rows = parseCsv(raw, {
+      delimiter,
+      relax_column_count: true,
+      skip_empty_lines: true,
+    }) as unknown[][];
+    return (rowsToMarkdownTable(rows) || '') + '\n';
   }
 
-  const workbook = xlsxReadFile(filePath);
+  const workbook = new ExcelJS.Workbook();
+  if (ext === '.xls') {
+    throw new Error('Legacy .xls (BIFF) is not supported by exceljs; convert to .xlsx first');
+  }
+  await workbook.xlsx.readFile(filePath);
+
   const parts: string[] = [];
-  const multi = workbook.SheetNames.length > 1;
-  for (const name of workbook.SheetNames) {
-    const sheet = workbook.Sheets[name];
-    const rows = xlsxUtils.sheet_to_json<unknown[]>(sheet, { header: 1, blankrows: false, defval: '' });
+  const sheets = workbook.worksheets;
+  const multi = sheets.length > 1;
+
+  for (const sheet of sheets) {
+    const rows: unknown[][] = [];
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      const values = row.values as unknown[];
+      rows.push(values.slice(1));
+    });
     const table = rowsToMarkdownTable(rows);
     if (!table) continue;
-    if (multi) parts.push(`## ${name}\n\n${table}`);
+    if (multi) parts.push(`## ${sheet.name}\n\n${table}`);
     else parts.push(table);
   }
   return parts.join('\n\n') + '\n';
