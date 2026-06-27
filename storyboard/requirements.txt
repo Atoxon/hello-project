@@ -1,0 +1,11 @@
+# Bắt buộc: ffmpeg. Nếu máy chưa có ffmpeg hệ thống, gói dưới đây sẽ kèm sẵn 1 bản.
+imageio-ffmpeg>=0.4.9
+
+# Tuỳ chọn - chỉ cần khi bật TTS (tts.enabled = true):
+#   backend "edge"  -> giọng đọc tự nhiên, miễn phí, cần internet
+edge-tts>=6.1.0
+#   backend "gtts"  -> Google TTS, cần internet
+gTTS>=2.5.0
+
+# Tuỳ chọn - chỉ cần khi muốn tự sinh ảnh placeholder để thử nghiệm:
+# Pillow>=10.0.0

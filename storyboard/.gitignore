@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+# video/audio đầu ra
+*.mp4
+*.srt
+# nhạc nền người dùng tự thêm
+examples/music.mp3

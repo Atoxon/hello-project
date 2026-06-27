@@ -1,0 +1,44 @@
+{
+  "title": "Cau chuyen demo",
+  "aspect": "9:16",
+  "fps": 30,
+  "motion": "kenburns",
+  "transition": "fade",
+  "transition_duration": 0.5,
+  "default_duration": 4.0,
+  "tts": {
+    "enabled": true,
+    "backend": "edge",
+    "voice": "vi-VN-HoaiMyNeural",
+    "rate": "+0%",
+    "lead": 0.3,
+    "tail": 0.6
+  },
+  "subtitles": {
+    "enabled": true,
+    "burn": true,
+    "font_size": 48
+  },
+  "background_music": {
+    "path": "music.mp3",
+    "volume": 0.12
+  },
+  "scenes": [
+    {
+      "image": "images/scene1.png",
+      "prompt": "A small village at the edge of a forest, golden morning light, cinematic, illustration",
+      "narration": "Ngày xửa ngày xưa, ở một ngôi làng nhỏ ven rừng..."
+    },
+    {
+      "image": "images/scene2.png",
+      "prompt": "A young girl looking at the horizon, dreaming of adventure, warm colors",
+      "narration": "Có một cô bé luôn mơ ước được khám phá thế giới rộng lớn ngoài kia."
+    },
+    {
+      "image": "images/scene3.png",
+      "prompt": "The girl stepping onto a forest path, backpack on, sunrise",
+      "narration": "Và rồi một ngày, cuộc phiêu lưu của cô chính thức bắt đầu.",
+      "duration": 5.0
+    }
+  ]
+}
