@@ -26,7 +26,47 @@ pip install -r requirements.txt
 ```
 
 - **FFmpeg**: nếu máy đã có `ffmpeg` thì dùng luôn; nếu chưa, gói `imageio-ffmpeg` kèm sẵn 1 bản.
-- **TTS** chỉ cần khi `tts.enabled = true` và cần **internet** (edge-tts/gTTS gọi dịch vụ online).
+- **TTS** chỉ cần khi `tts.enabled = true` và cần **internet** (mọi backend đều gọi dịch vụ online).
+
+## Giọng đọc (TTS) & API key
+
+Có 5 backend, chọn ở `tts.backend`:
+
+| backend      | API key? | Biến môi trường            | Ghi chú                                   |
+|--------------|----------|----------------------------|-------------------------------------------|
+| `edge`       | Không    | —                          | Mặc định. Giọng VN tự nhiên, `pip install edge-tts` |
+| `gtts`       | Không    | —                          | Google Translate TTS, `pip install gTTS`  |
+| `openai`     | Có       | `OPENAI_API_KEY`           | Giọng: alloy, echo, nova, shimmer...      |
+| `elevenlabs` | Có       | `ELEVENLABS_API_KEY`       | `voice` = voice_id; chất lượng cao        |
+| `azure`      | Có       | `AZURE_SPEECH_KEY` (+ `AZURE_SPEECH_REGION`) | Giọng `vi-VN-HoaiMyNeural`... |
+
+### Cách cung cấp API key (cho backend trả phí)
+
+Thứ tự ưu tiên khi lấy key:
+
+1. **Khai báo thẳng trong kịch bản**: `tts.api_key` (tiện nhưng đừng commit lên git).
+2. **Biến môi trường / file `.env`**:
+   ```bash
+   cp .env.example .env      # rồi điền key vào .env
+   # hoặc: export OPENAI_API_KEY=sk-...
+   ```
+   `.env` được tự nạp từ: file truyền qua `--env`, rồi `.env` cạnh kịch bản, rồi `.env` ở thư mục hiện tại.
+3. **Hỏi nhập trực tiếp**: nếu chạy ở terminal mà chưa tìm thấy key, công cụ sẽ
+   **hỏi nhập key** (ẩn ký tự) và cho phép **lưu vào `.env`** để lần sau khỏi nhập lại.
+
+> `.env` đã được thêm vào `.gitignore` — sẽ không bị commit.
+
+Có thể đổi tên biến môi trường bằng `tts.api_key_env`. Ví dụ kịch bản dùng OpenAI:
+
+```jsonc
+"tts": {
+  "enabled": true,
+  "backend": "openai",
+  "voice": "nova",
+  "model": "gpt-4o-mini-tts"
+  // key lấy từ OPENAI_API_KEY trong .env, hoặc sẽ được hỏi khi chạy
+}
+```
 
 ## Dùng nhanh
 

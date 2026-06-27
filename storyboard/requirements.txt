@@ -4,8 +4,10 @@ imageio-ffmpeg>=0.4.9
 # Tuỳ chọn - chỉ cần khi bật TTS (tts.enabled = true):
 #   backend "edge"  -> giọng đọc tự nhiên, miễn phí, cần internet
 edge-tts>=6.1.0
-#   backend "gtts"  -> Google TTS, cần internet
+#   backend "gtts"  -> Google TTS, miễn phí, cần internet
 gTTS>=2.5.0
+#   backend "openai" / "elevenlabs" / "azure" -> cần API key, KHÔNG cần thêm
+#   thư viện nào (gọi qua urllib chuẩn). Xem .env.example để khai báo key.
 
 # Tuỳ chọn - chỉ cần khi muốn tự sinh ảnh placeholder để thử nghiệm:
 # Pillow>=10.0.0

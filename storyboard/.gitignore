@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
+# API key - KHÔNG commit
+.env
 # video/audio đầu ra
 *.mp4
 *.srt

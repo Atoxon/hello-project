@@ -7,7 +7,10 @@ storyboard - Tự dựng timeline video từ kịch bản + ảnh.
 
 Tính năng:
   - Tự tính thời lượng mỗi cảnh theo voiceover (TTS) hoặc theo số giây cố định.
-  - TTS tiếng Việt (backend: edge-tts hoặc gTTS).
+  - TTS tiếng Việt nhiều backend:
+      * miễn phí, không cần key: edge (edge-tts), gtts
+      * cần API key:            openai, elevenlabs, azure
+  - Tự nạp .env và cho phép nhập API key trực tiếp (lưu lại nếu muốn).
   - Phụ đề: ghi đè lên video (burn) hoặc xuất file .srt riêng.
   - Nhạc nền (tự lặp, chỉnh âm lượng).
   - Hiệu ứng Ken Burns (zoom/pan nhẹ cho ảnh tĩnh).
@@ -18,6 +21,7 @@ Cách dùng:
     python3 storyboard.py kichban.json
     python3 storyboard.py kichban.json -o video.mp4
     python3 storyboard.py kichban.json --dry-run      # chỉ in timeline, không render
+    python3 storyboard.py kichban.json --env .env     # chỉ định file .env chứa API key
     python3 storyboard.py --init kichban.json         # tạo file kịch bản mẫu
 
 Xem README.md để biết định dạng file kịch bản.
@@ -32,6 +36,9 @@ import sys
 import tempfile
 import wave
 import contextlib
+import urllib.request
+import urllib.error
+from xml.sax.saxutils import escape as xml_escape
 
 # --------------------------------------------------------------------------- #
 # Tìm ffmpeg / ffprobe
@@ -93,16 +100,126 @@ def parse_size(aspect):
 # TTS (text-to-speech)
 # --------------------------------------------------------------------------- #
 
-def tts_generate(text, out_path, backend, voice, rate):
-    """Tạo file audio voiceover từ text. Trả về True nếu thành công."""
+# Tên biến môi trường mặc định cho từng backend cần API key.
+DEFAULT_KEY_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "elevenlabs": "ELEVENLABS_API_KEY",
+    "azure": "AZURE_SPEECH_KEY",
+}
+# Giọng mặc định nếu kịch bản không khai báo.
+DEFAULT_VOICE = {
+    "edge": "vi-VN-HoaiMyNeural",
+    "gtts": "vi",
+    "openai": "alloy",
+    "elevenlabs": "21m00Tcm4TlvDq8ikWAM",   # "Rachel" - multilingual
+    "azure": "vi-VN-HoaiMyNeural",
+}
+
+
+def load_env_files(paths):
+    """Nạp biến từ các file .env (không ghi đè biến đã có sẵn). Không cần python-dotenv."""
+    for p in paths:
+        if not p or not os.path.exists(p):
+            continue
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+
+
+def _save_to_env(env_name, value, env_path=".env"):
+    """Ghi/cập nhật 1 dòng KEY=VALUE vào file .env."""
+    lines = []
+    found = False
+    if os.path.exists(env_path):
+        with open(env_path, encoding="utf-8") as f:
+            for line in f:
+                if line.strip().startswith(env_name + "="):
+                    lines.append(f"{env_name}={value}\n")
+                    found = True
+                else:
+                    lines.append(line)
+    if not found:
+        if lines and not lines[-1].endswith("\n"):
+            lines.append("\n")
+        lines.append(f"{env_name}={value}\n")
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+
+def get_api_key(tts, backend):
+    """Lấy API key theo thứ tự: kịch bản -> biến môi trường -> hỏi nhập trực tiếp."""
+    # 1) Khai báo thẳng trong kịch bản (không khuyến khích commit)
+    if tts.get("api_key"):
+        return tts["api_key"]
+    env_name = tts.get("api_key_env") or DEFAULT_KEY_ENV.get(backend)
+    # 2) Biến môi trường / .env
+    if env_name and os.environ.get(env_name):
+        return os.environ[env_name]
+    # 3) Hỏi nhập trực tiếp (chỉ khi chạy ở terminal tương tác)
+    if env_name and sys.stdin.isatty():
+        import getpass
+        key = getpass.getpass(
+            f"  Nhập API key cho TTS '{backend}' ({env_name}): ").strip()
+        if key:
+            os.environ[env_name] = key
+            try:
+                ans = input("  Lưu key này vào file .env? [y/N]: ").strip().lower()
+            except EOFError:
+                ans = "n"
+            if ans == "y":
+                _save_to_env(env_name, key)
+                print("  Đã lưu vào .env (nhớ thêm .env vào .gitignore).")
+            return key
+    sys.exit(
+        f"Thiếu API key cho TTS backend '{backend}'.\n"
+        f"  - Đặt biến môi trường: export {env_name}=...\n"
+        f"  - Hoặc thêm vào file .env:  {env_name}=...\n"
+        f"  - Hoặc khai báo trong kịch bản: tts.api_key")
+
+
+def tts_generate(text, out_path, tts):
+    """Tạo file audio voiceover từ text theo cấu hình tts. Trả về True nếu thành công."""
     text = (text or "").strip()
     if not text:
         return False
+    backend = tts.get("backend", "edge")
+    voice = tts.get("voice") or DEFAULT_VOICE.get(backend)
     if backend == "edge":
-        return _tts_edge(text, out_path, voice, rate)
+        return _tts_edge(text, out_path, voice, tts.get("rate", "+0%"))
     if backend == "gtts":
-        return _tts_gtts(text, out_path)
-    raise ValueError(f"TTS backend không hỗ trợ: {backend!r} (dùng 'edge' hoặc 'gtts')")
+        return _tts_gtts(text, out_path, voice or "vi")
+    if backend == "openai":
+        return _tts_openai(text, out_path, tts, voice, get_api_key(tts, backend))
+    if backend == "elevenlabs":
+        return _tts_elevenlabs(text, out_path, tts, voice, get_api_key(tts, backend))
+    if backend == "azure":
+        return _tts_azure(text, out_path, tts, voice, get_api_key(tts, backend))
+    raise ValueError(
+        f"TTS backend không hỗ trợ: {backend!r} "
+        f"(dùng: edge | gtts | openai | elevenlabs | azure)")
+
+
+def _http_post(url, data, headers, out_path, timeout=120):
+    """POST nhị phân, lưu phần thân phản hồi (audio) ra file."""
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            audio = r.read()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", "ignore")[:400]
+        sys.exit(f"TTS API lỗi HTTP {e.code}: {body}")
+    except urllib.error.URLError as e:
+        sys.exit(f"Không gọi được TTS API (mạng?): {e}")
+    with open(out_path, "wb") as f:
+        f.write(audio)
+    return os.path.getsize(out_path) > 0
 
 
 def _tts_edge(text, out_path, voice, rate):
@@ -120,13 +237,65 @@ def _tts_edge(text, out_path, voice, rate):
     return os.path.exists(out_path) and os.path.getsize(out_path) > 0
 
 
-def _tts_gtts(text, out_path):
+def _tts_gtts(text, out_path, lang):
     try:
         from gtts import gTTS
     except ImportError:
         sys.exit("Cần gTTS cho TTS backend 'gtts':  pip install gTTS")
-    gTTS(text=text, lang="vi").save(out_path)
+    gTTS(text=text, lang=lang or "vi").save(out_path)
     return os.path.exists(out_path) and os.path.getsize(out_path) > 0
+
+
+def _tts_openai(text, out_path, tts, voice, key):
+    """OpenAI TTS. Giọng: alloy, echo, fable, onyx, nova, shimmer... (đa ngôn ngữ)."""
+    body = json.dumps({
+        "model": tts.get("model", "gpt-4o-mini-tts"),
+        "voice": voice,
+        "input": text,
+        "response_format": "mp3",
+    }).encode("utf-8")
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    base = tts.get("base_url", "https://api.openai.com/v1").rstrip("/")
+    return _http_post(f"{base}/audio/speech", body, headers, out_path)
+
+
+def _tts_elevenlabs(text, out_path, tts, voice, key):
+    """ElevenLabs TTS. `voice` là voice_id; model mặc định eleven_multilingual_v2."""
+    body = json.dumps({
+        "text": text,
+        "model_id": tts.get("model", "eleven_multilingual_v2"),
+    }).encode("utf-8")
+    headers = {"xi-api-key": key, "Content-Type": "application/json",
+               "Accept": "audio/mpeg"}
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice}"
+    return _http_post(url, body, headers, out_path)
+
+
+def _tts_azure(text, out_path, tts, voice, key):
+    """Azure Speech TTS (REST + SSML). Cần thêm 'region' hoặc AZURE_SPEECH_REGION."""
+    region = tts.get("region") or os.environ.get("AZURE_SPEECH_REGION")
+    if not region:
+        sys.exit("Azure TTS cần 'region' trong kịch bản (tts.region) "
+                 "hoặc biến môi trường AZURE_SPEECH_REGION.")
+    # Lấy access token ngắn hạn
+    token_url = f"https://{region}.api.cognitive.microsoft.com/sts/v1.0/issueToken"
+    treq = urllib.request.Request(
+        token_url, data=b"", method="POST",
+        headers={"Ocp-Apim-Subscription-Key": key, "Content-Length": "0"})
+    try:
+        with urllib.request.urlopen(treq, timeout=30) as r:
+            token = r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        sys.exit(f"Azure token lỗi {e.code}: {e.read().decode('utf-8','ignore')[:300]}")
+    lang = voice.split("-")[0] + "-" + voice.split("-")[1] if "-" in voice else "vi-VN"
+    ssml = (f"<speak version='1.0' xml:lang='{lang}'>"
+            f"<voice name='{voice}'>{xml_escape(text)}</voice></speak>").encode("utf-8")
+    headers = {"Authorization": f"Bearer {token}",
+               "Content-Type": "application/ssml+xml",
+               "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+               "User-Agent": "storyboard"}
+    url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
+    return _http_post(url, ssml, headers, out_path)
 
 
 # --------------------------------------------------------------------------- #
@@ -355,13 +524,16 @@ def burn_subtitles(video, ass_path, out_path):
 # Quy trình chính
 # --------------------------------------------------------------------------- #
 
-def resolve_durations(cfg, workdir):
-    """Tính thời lượng mỗi cảnh, sinh TTS nếu cần."""
+def estimate_speech_seconds(text):
+    """Ước lượng thời gian đọc (giây) từ số tiếng - dùng cho --dry-run."""
+    words = len((text or "").split())
+    return max(1.0, words / 3.0)   # ~3 tiếng/giây cho tiếng Việt
+
+
+def resolve_durations(cfg, workdir, dry_run=False):
+    """Tính thời lượng mỗi cảnh, sinh TTS nếu cần (dry_run thì chỉ ước lượng)."""
     tts = cfg.get("tts", {})
     tts_on = tts.get("enabled", False)
-    backend = tts.get("backend", "edge")
-    voice = tts.get("voice", "vi-VN-HoaiMyNeural")
-    rate = tts.get("rate", "+0%")
     lead = float(tts.get("lead", 0.3))   # im lặng đầu cảnh
     tail = float(tts.get("tail", 0.6))   # đệm cuối cảnh
     default_dur = float(cfg.get("default_duration", 4.0))
@@ -375,8 +547,14 @@ def resolve_durations(cfg, workdir):
 
         explicit = sc.get("duration")
         if tts_on and (sc.get("narration") or "").strip():
+            if dry_run:
+                # Không gọi TTS khi xem trước - chỉ ước lượng thời lượng.
+                spoken = estimate_speech_seconds(sc["narration"])
+                sc["_duration"] = max(explicit or 0.0, lead + spoken + tail)
+                sc["_estimated"] = True
+                continue
             audio_path = os.path.join(workdir, f"tts_{i:03d}.mp3")
-            ok = tts_generate(sc["narration"], audio_path, backend, voice, rate)
+            ok = tts_generate(sc["narration"], audio_path, tts)
             if ok:
                 spoken = audio_duration(audio_path)
                 sc["_audio"] = audio_path
@@ -399,7 +577,7 @@ def build(cfg, out_path, dry_run=False):
 
     workdir = tempfile.mkdtemp(prefix="storyboard_")
     try:
-        resolve_durations(cfg, workdir)
+        resolve_durations(cfg, workdir, dry_run=dry_run)
         scenes = cfg["scenes"]
 
         # In timeline
@@ -407,9 +585,11 @@ def build(cfg, out_path, dry_run=False):
               f"| motion: {motion}")
         print("  " + "-" * 56)
         t = 0.0
+        any_est = False
         for sc in scenes:
             d = sc["_duration"]
-            tag = "♪" if sc.get("_audio") else " "
+            tag = "~" if sc.get("_estimated") else ("♪" if sc.get("_audio") else " ")
+            any_est = any_est or sc.get("_estimated", False)
             txt = (sc.get("narration") or sc.get("subtitle") or "")[:38]
             print(f"  {tag} [{t:6.1f}s → {t+d:6.1f}s] ({d:4.1f}s) "
                   f"{os.path.basename(sc['image']):<18} {txt}")
@@ -418,6 +598,8 @@ def build(cfg, out_path, dry_run=False):
         print(f"  Tổng thời lượng: {t:.1f}s ({len(scenes)} cảnh)\n")
 
         if dry_run:
+            if any_est:
+                print("  (~ = thời lượng ƯỚC LƯỢNG; thời lượng thật phụ thuộc TTS khi render)")
             print("  (--dry-run: chỉ hiển thị timeline, không render)")
             return
 
@@ -493,7 +675,9 @@ SAMPLE = {
         "voice": "vi-VN-HoaiMyNeural",
         "rate": "+0%",
         "lead": 0.3,
-        "tail": 0.6
+        "tail": 0.6,
+        "_huong_dan_backend": "edge|gtts (mien phi) hoac openai|elevenlabs|azure (can API key)",
+        "_api_key": "Voi backend tra phi: dat OPENAI_API_KEY/ELEVENLABS_API_KEY/AZURE_SPEECH_KEY trong .env, hoac de trong se duoc hoi nhap khi chay"
     },
     "subtitles": {"enabled": True, "burn": True, "font_size": 48},
     "background_music": {"path": "music.mp3", "volume": 0.12},
@@ -540,6 +724,7 @@ def main():
                     help="Chỉ in timeline, không render")
     ap.add_argument("--init", action="store_true",
                     help="Tạo file kịch bản mẫu tại đường dẫn `scenario`")
+    ap.add_argument("--env", help="File .env chứa API key (mặc định: .env cạnh kịch bản và cwd)")
     args = ap.parse_args()
 
     if args.init:
@@ -552,7 +737,12 @@ def main():
 
     with open(args.scenario, encoding="utf-8") as f:
         cfg = json.load(f)
-    cfg["_base_dir"] = os.path.dirname(os.path.abspath(args.scenario))
+    base_dir = os.path.dirname(os.path.abspath(args.scenario))
+    cfg["_base_dir"] = base_dir
+
+    # Nạp API key từ .env: ưu tiên file chỉ định, rồi .env cạnh kịch bản, rồi cwd.
+    load_env_files([args.env, os.path.join(base_dir, ".env"),
+                    os.path.join(os.getcwd(), ".env")])
 
     if not cfg.get("scenes"):
         sys.exit("Kịch bản không có cảnh nào (thiếu khoá 'scenes').")
